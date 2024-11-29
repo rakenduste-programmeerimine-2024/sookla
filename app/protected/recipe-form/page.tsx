@@ -1,12 +1,13 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { createClient } from "@/utils/supabase/client";
+import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Label } from "@radix-ui/react-label";
 import { Cropper, ReactCropperElement } from "react-cropper";
 import "cropperjs/dist/cropper.css";
 import { Alert } from "flowbite-react";
-import { useRouter } from "next/navigation";
+import { fetchCategories, uploadImage, addRecipe } from "../../actions";
+import { createClient } from "@/utils/supabase/client";
 
 type Category = {
   id: number;
@@ -32,6 +33,7 @@ export default function RecipeForm() {
   const [image, setImage] = useState<File | null>(null);
   const cropperRef = useRef<ReactCropperElement>(null);
   const [errors, setErrors] = useState<string[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
   const router = useRouter();
 
   const validateForm = () => {
@@ -57,24 +59,26 @@ export default function RecipeForm() {
   };
 
   useEffect(() => {
-    const fetchCategories = async () => {
+    const loadCategories = async () => {
       try {
-        const { data, error } = await supabase
-          .from("categories")
-          .select("id, category_name");
-
-        if (error) {
-          console.error("Error fetching categories:", error);
-          throw error;
-        }
-
-        setCategories(data || []);
+        const data = await fetchCategories();
+        setCategories(data);
       } catch (err) {
-        console.error("Error in fetchCategories function:", err);
+        console.error("Error loading categories:", err);
       }
     };
 
-    fetchCategories();
+    const checkUserSession = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (error || !data?.session?.user?.id) {
+        console.error("User not logged in");
+        return;
+      }
+      setUserId(data.session.user.id);
+    };
+
+    loadCategories();
+    checkUserSession();
   }, []);
 
   const addIngredientField = () => {
@@ -113,110 +117,28 @@ export default function RecipeForm() {
     });
   };
 
-  const uploadImage = async (croppedImageURL: string | null) => {
-    if (!croppedImageURL) {
-      console.error("No cropped image available");
-      return null;
-    }
-
-    const blob = await (await fetch(croppedImageURL)).blob();
-    const fileExtension = image?.name.split(".").pop();
-    const filePath = `recipe-images/${Date.now()}.${fileExtension}`;
-
-    try {
-      const { data, error } = await supabase.storage
-        .from("recipe-images")
-        .upload(filePath, blob);
-
-      if (error) {
-        console.error("Error uploading image:", error.message);
-        return null;
-      }
-
-      return data?.path;
-    } catch (err) {
-      console.error("Error uploading image:", err);
-      return null;
-    }
-  };
-
-  const addRecipe = async (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
-    if (!validateForm()) {
-      return;
-    }
-
-    if (
-      !title ||
-      !ingredients ||
-      !servings ||
-      !categories ||
-      !totalTimeMinutes ||
-      !stepsDescription
-    ) {
-      console.error("All fields, except image field, are required.");
+    if (!validateForm() || !userId) {
       return;
     }
 
     const croppedImageURL = await getCroppedImageURL();
     const imagePath = croppedImageURL
-      ? await uploadImage(croppedImageURL)
+      ? await uploadImage(image, croppedImageURL)
       : null;
 
-    const { data: sessionData, error: sessionError } =
-      await supabase.auth.getSession();
-    if (sessionError) {
-      console.error("Error fetching session:", sessionError.message);
-      return;
-    }
-
-    const userId = sessionData?.session?.user?.id;
-    if (!userId) {
-      console.error("User must be logged in to submit a recipe.");
-      return;
-    }
-
-    const ingredientText = ingredients
-      .map((ingredient) => `${ingredient.name} ${ingredient.quantity}`)
-      .join(", ");
-
-    const { data, error } = await supabase
-      .from("ingredients")
-      .insert({
-        ingredient_text: ingredientText,
-      })
-      .select("id")
-      .single();
-
-    if (error) {
-      console.error("Error adding ingredient:", error.message);
-      return;
-    }
-
-    const ingredientId = data?.id;
-
-    const { data: recipeData, error: recipeError } = await supabase
-      .from("published_recipes")
-      .insert([
-        {
-          title,
-          servings,
-          categories_id: parseInt(selectedCategory),
-          total_time_minutes: totalTimeMinutes,
-          ingredients_id: ingredientId,
-          steps_description: stepsDescription,
-          image_url: imagePath,
-          time_of_creation: new Date().toISOString(),
-          users_id: userId,
-        },
-      ])
-      .single();
-
-    if (recipeError) {
-      console.error("Error adding recipe:", recipeError.message);
-      return;
-    }
+    const recipeData = await addRecipe(
+      title,
+      servings,
+      selectedCategory,
+      totalTimeMinutes,
+      stepsDescription,
+      ingredients,
+      imagePath,
+      userId
+    );
 
     console.log("Recipe added successfully:", recipeData);
 
@@ -244,7 +166,7 @@ export default function RecipeForm() {
         </Alert>
       )}
       <form
-        onSubmit={addRecipe}
+        onSubmit={handleSubmit}
         className="p-12 mb-12 mt-10 border shadow-xl bg-red-100 rounded-lg w-[750px] mx-auto"
       >
         <div className="space-y-2">

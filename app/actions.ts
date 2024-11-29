@@ -306,3 +306,113 @@ export async function deleteRecipe(recipeId: number): Promise<boolean> {
     return false;
   }
 }
+
+
+export const fetchCategories = async () => {
+  const supabase = await createClient();
+  try {
+    const { data, error } = await supabase
+      .from("categories")
+      .select("id, category_name");
+
+    if (error) {
+      console.error("Error fetching categories:", error);
+      throw error;
+    }
+    return data || [];
+  } catch (err) {
+    console.error("Error in fetchCategories function:", err);
+    throw err;
+  }
+};
+
+export const uploadImage = async (
+  image: File | null,
+  croppedImageURL: string | null
+) => {
+  if (!croppedImageURL || !image) {
+    console.error("No cropped image or image available");
+    return null;
+  }
+
+  const blob = await (await fetch(croppedImageURL)).blob();
+  const fileExtension = image.name.split(".").pop();
+  const filePath = `recipe-images/${Date.now()}.${fileExtension}`;
+
+  const supabase = await createClient();
+
+  try {
+    const { data, error } = await supabase.storage
+      .from("recipe-images")
+      .upload(filePath, blob);
+
+    if (error) {
+      console.error("Error uploading image:", error.message);
+      return null;
+    }
+    return data?.path;
+  } catch (err) {
+    console.error("Error uploading image:", err);
+    return null;
+  }
+};
+
+export const addRecipe = async (
+  title: string,
+  servings: number,
+  selectedCategory: string,
+  totalTimeMinutes: number,
+  stepsDescription: string,
+  ingredients: { name: string; quantity: string }[],
+  imagePath: string | null,
+  userId: string
+) => {
+  const supabase = await createClient();
+
+  const ingredientText = ingredients
+    .map((ingredient) => `${ingredient.name} ${ingredient.quantity}`)
+    .join(", ");
+
+  try {
+    const { data, error } = await supabase
+      .from("ingredients")
+      .insert({ ingredient_text: ingredientText })
+      .select("id")
+      .single();
+
+    if (error) {
+      console.error("Error adding ingredient:", error.message);
+      return null;
+    }
+
+    const ingredientId = data?.id;
+
+    const { data: recipeData, error: recipeError } = await supabase
+      .from("published_recipes")
+      .insert([
+        {
+          title,
+          servings,
+          categories_id: parseInt(selectedCategory),
+          total_time_minutes: totalTimeMinutes,
+          ingredients_id: ingredientId,
+          steps_description: stepsDescription,
+          image_url: imagePath,
+          time_of_creation: new Date().toISOString(),
+          users_id: userId,
+        },
+      ])
+      .single();
+
+    if (recipeError) {
+      console.error("Error adding recipe:", recipeError.message);
+      return null;
+    }
+
+    console.log("Recipe added successfully:", recipeData);
+    return recipeData;
+  } catch (err) {
+    console.error("Error adding recipe:", err);
+    return null;
+  }
+};
